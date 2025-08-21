@@ -5,7 +5,7 @@ on:
   push:
     branches:
       - main # Trigger on pushes to the main branch.
-    patterns:
+    paths:
       - 'Dockerfile' # Trigger on changes to the Dockerfile.
       - 'jupyter_server_config.py' # Trigger on changes to this file.
 
