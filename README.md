@@ -19,7 +19,13 @@ Jupyter Student Stack is a Docker image designed for educational environments, p
 
 ## Usage Instructions
 
-1. **Build the Docker image:**
+
+1. **Obtain the image from Docker Hub:**
+	```powershell
+	docker pull cavefish/jupyter-student-stack
+	```
+
+	Or build locally:
 	```powershell
 	docker build -t jupyter-student-stack .
 	```
