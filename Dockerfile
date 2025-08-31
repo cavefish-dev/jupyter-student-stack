@@ -1,4 +1,4 @@
-FROM jupyter/minimal-notebook:ubuntu-22.04
+FROM quay.io/jupyter/minimal-notebook:latest
 
 USER root
 
@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     gcc \
     make \
     nodejs \
+    npm \
     openjdk-21-jdk \
     software-properties-common \
     && rm -rf /var/lib/apt/lists/*
@@ -26,8 +27,8 @@ RUN unzip ijava-kernel.zip -d ijava-kernel && \
 ADD https://github.com/allen-ball/ganymede/releases/download/v2.1.2.20230910/ganymede-2.1.2.20230910.jar ganymede.jar
 RUN java -jar ganymede.jar -i --copy-jar=true --sys-prefix && rm ganymede.jar
 
-# Install IJavascript
-RUN npm install -g ijavascript && ijsinstall
+# Install Deno (JavaScript/TypeScript runtime)
+RUN npm install -g deno && deno jupyter --unstable --install
 
 # Install gnu C kernel
 RUN pip install jupyter-c-kernel && install_c_kernel --sys-prefix
