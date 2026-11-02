@@ -1,0 +1,15 @@
+# Claude / AI assistant files (this repo is public)
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+docs/superpowers/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+
+# Jupyter
+.ipynb_checkpoints/
