@@ -1,72 +1,114 @@
-FROM quay.io/jupyter/minimal-notebook:latest
+# Jupyter Student Stack: one image per language plus a full image.
+#
+#   docker build --target full -t jupyter-student-stack .        (default: full)
+#   docker build --target java -t jupyter-student-stack:java .
+#
+# Targets: base/python, java, javascript, c, sql, asm, full.
+# Every image includes Python and Bash; each language image adds one kernel.
+
+ARG BASE_IMAGE=quay.io/jupyter/minimal-notebook:latest
+
+# ---------------------------------------------------------------------------
+# base: Python + Bash kernels, extensions, language server support
+# ---------------------------------------------------------------------------
+FROM ${BASE_IMAGE} AS base
 
 USER root
 
-# Install dependencies
-RUN apt-get update && apt-get install -y \
-    g++ \
-    gcc \
-    make \
-    nodejs \
-    npm \
-    openjdk-21-jdk \
-    software-properties-common \
-    && rm -rf /var/lib/apt/lists/*
+# Node.js is needed by the language servers
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends nodejs npm && \
+    rm -rf /var/lib/apt/lists/*
 
 # Update notebook
-RUN pip install --upgrade notebook==7.3.3
+RUN pip install --no-cache-dir --upgrade notebook==7.3.3
 
-# Unpack and install iJava kernel
-ADD https://github.com/SpencerPark/IJava/releases/download/v1.3.0/ijava-1.3.0.zip ijava-kernel.zip
-RUN unzip ijava-kernel.zip -d ijava-kernel && \
-    rm ijava-kernel.zip && \
-    cd ijava-kernel && \
-    python3 install.py --sys-prefix
+# Install extensions and the Bash kernel
+RUN pip install --no-cache-dir \
+        nbgrader \
+        nbgitpuller \
+        jupyter-resource-usage \
+        variable_inspector \
+        jupyterlab_rise \
+        jupyterlab-language-pack-es-ES \
+        jupyterlab-lsp \
+        python-lsp-server \
+        bash_kernel && \
+    python -m bash_kernel.install --sys-prefix
 
-# Install Ganymede
-ADD https://github.com/allen-ball/ganymede/releases/download/v2.1.2.20230910/ganymede-2.1.2.20230910.jar ganymede.jar
-RUN java -jar ganymede.jar -i --copy-jar=true --sys-prefix && rm ganymede.jar
+# Install the language servers globally, where jupyterlab-lsp finds them
+RUN npm install -g --prefix "${CONDA_DIR}" bash-language-server && \
+    npm cache clean --force
 
-# Install Deno (JavaScript/TypeScript runtime)
-RUN npm install -g deno && deno jupyter --unstable --install
+# Example notebooks: each image copies its own into /opt/examples (last layer,
+# so editing a notebook doesn't rebuild the kernels); refreshed into ~/examples on every start
+COPY docker/before-notebook.d/10-examples.sh /usr/local/bin/before-notebook.d/10-examples.sh
 
-# Install gnu C kernel
-RUN pip install jupyter-c-kernel && install_c_kernel --sys-prefix
+COPY --chown=${NB_UID}:${NB_GID} jupyter_server_config.py /home/${NB_USER}/.jupyter/jupyter_server_config.py
+RUN --mount=type=bind,source=docker/install,target=/tmp/install \
+    bash /tmp/install/cleanup.sh
 
-# Install sql kernel
-RUN conda install -c conda-forge xeus-sqlite
+USER ${NB_UID}
 
-# Install the language servers
-RUN npm install --save-dev \
-    bash-language-server \
-    dockerfile-language-server-nodejs \
-    javascript-typescript-langserver \
-#    jedi-language-server \
-#    julia-language-server \
-#    pyright \
-#    python-language-server \
-#    python-lsp-server \
-#    r-languageserver \
-    sql-language-server 
-#    texlab \
-#    typescript-language-server \
-#    unified-language-server \
-#    vscode-css-languageserver-bin \
-#    vscode-html-languageserver-bin \
-#    vscode-json-languageserver-bin \
-#    yaml-language-server
+# ---------------------------------------------------------------------------
+# One image per language
+# ---------------------------------------------------------------------------
+FROM base AS python
+COPY examples/README.md examples/00-linux-bash-basics.ipynb examples/01-python-basics.ipynb /opt/examples/
 
-# Install extensions
-RUN pip install nbgrader && \
-    pip install nbgitpuller && \
-    pip install jupyter-resource-usage && \
-    pip install variable_inspector && \
-    pip install jupyterlab_rise && \
-    pip install jupyterlab-language-pack-es-ES
+FROM base AS java
+USER root
+RUN --mount=type=bind,source=docker/install,target=/tmp/install \
+    bash /tmp/install/java.sh && bash /tmp/install/cleanup.sh
+COPY examples/README.md examples/00-linux-bash-basics.ipynb examples/01-python-basics.ipynb examples/02-java-basics.ipynb /opt/examples/
+USER ${NB_UID}
 
+FROM base AS javascript
+USER root
+RUN --mount=type=bind,source=docker/install,target=/tmp/install \
+    bash /tmp/install/javascript.sh && bash /tmp/install/cleanup.sh
+COPY examples/README.md examples/00-linux-bash-basics.ipynb examples/01-python-basics.ipynb examples/03-javascript-basics.ipynb /opt/examples/
+USER ${NB_UID}
 
-# Set user back to priviledged user.
-RUN chown -R "$NB_USER" "/home/$NB_USER/.local"  "/home/$NB_USER/.ipython"
-USER $NB_USER
-COPY jupyter_server_config.py /home/$NB_USER/.jupyter/jupyter_server_config.py
-# RUN jupyter labextension disable @jupyterlab/extensionmanager-extension
+FROM base AS c
+USER root
+RUN --mount=type=bind,source=docker/install,target=/tmp/install \
+    bash /tmp/install/c.sh && bash /tmp/install/cleanup.sh
+COPY examples/README.md examples/00-linux-bash-basics.ipynb examples/01-python-basics.ipynb examples/04-c-basics.ipynb /opt/examples/
+USER ${NB_UID}
+
+FROM base AS sql
+USER root
+RUN --mount=type=bind,source=docker/install,target=/tmp/install \
+    bash /tmp/install/sql.sh && bash /tmp/install/cleanup.sh
+COPY examples/README.md examples/00-linux-bash-basics.ipynb examples/01-python-basics.ipynb examples/05-sql-basics.ipynb /opt/examples/
+USER ${NB_UID}
+
+FROM base AS asm
+USER root
+RUN --mount=type=bind,source=docker/install,target=/tmp/install \
+    --mount=type=bind,source=kernels/asm,target=/tmp/asm-kernel,rw \
+    bash /tmp/install/asm.sh && bash /tmp/install/cleanup.sh
+COPY examples/README.md examples/00-linux-bash-basics.ipynb examples/01-python-basics.ipynb examples/06-assembly-basics.ipynb /opt/examples/
+USER ${NB_UID}
+
+# ---------------------------------------------------------------------------
+# full: every kernel and every example (default target)
+# ---------------------------------------------------------------------------
+FROM base AS full
+USER root
+RUN --mount=type=bind,source=docker/install,target=/tmp/install \
+    bash /tmp/install/java.sh
+RUN --mount=type=bind,source=docker/install,target=/tmp/install \
+    bash /tmp/install/javascript.sh
+RUN --mount=type=bind,source=docker/install,target=/tmp/install \
+    bash /tmp/install/c.sh
+RUN --mount=type=bind,source=docker/install,target=/tmp/install \
+    bash /tmp/install/sql.sh
+RUN --mount=type=bind,source=docker/install,target=/tmp/install \
+    --mount=type=bind,source=kernels/asm,target=/tmp/asm-kernel,rw \
+    bash /tmp/install/asm.sh
+RUN --mount=type=bind,source=docker/install,target=/tmp/install \
+    bash /tmp/install/cleanup.sh
+COPY examples/ /opt/examples/
+USER ${NB_UID}

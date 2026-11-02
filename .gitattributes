@@ -1,0 +1,6 @@
+# Scripts and Docker files run inside Linux containers: always LF
+*.sh text eol=lf
+Dockerfile text eol=lf
+Dockerfile.* text eol=lf
+*.py text eol=lf
+*.ipynb text eol=lf
