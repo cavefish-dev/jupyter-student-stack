@@ -3,7 +3,7 @@
 set -euxo pipefail
 
 apt-get update
-apt-get install -y --no-install-recommends gcc g++ make libc6-dev
+apt-get install -y --no-install-recommends gcc make libc6-dev
 rm -rf /var/lib/apt/lists/*
 
 pip install --no-cache-dir jupyter-c-kernel
