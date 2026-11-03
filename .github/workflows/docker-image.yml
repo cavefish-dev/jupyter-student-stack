@@ -1,4 +1,4 @@
-name: Create and publish a Docker image
+name: Create and publish Docker images
 
 on:
   workflow_dispatch: # Trigger the workflow manually from the GitHub Actions UI.
@@ -6,102 +6,186 @@ on:
     branches:
       - main # Trigger on pushes to the main branch.
     paths:
-      - 'Dockerfile' # Trigger on changes to the Dockerfile.
-      - 'jupyter_server_config.py' # Trigger on changes to this file.
+      - 'Dockerfile'
+      - 'jupyter_server_config.py'
+      - 'docker/**'
+      - 'examples/**'
+      - 'kernels/**'
+      - 'ci/**'
+      - '.github/workflows/docker-image.yml'
+  pull_request: # Build and test, but don't push.
+    paths:
+      - 'Dockerfile'
+      - 'jupyter_server_config.py'
+      - 'docker/**'
+      - 'examples/**'
+      - 'kernels/**'
+      - 'ci/**'
+      - '.github/workflows/docker-image.yml'
 
 env:
   REGISTRY: cavefish # Docker registry username or organization.
   IMAGE_NAME: jupyter-student-stack # Name of the Docker image to be built and pushed.
 
+# One run at a time, so a run never builds on top of a base pushed by another run.
+concurrency:
+  group: docker-images-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  build-and-push-image:
-    runs-on: ubuntu-latest # Use the latest Ubuntu runner.
+  asm-kernel-tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build test image
+        run: docker buildx build --platform linux/${{ matrix.arch }} --load -t asm-kernel-test -f kernels/asm/Dockerfile.test kernels/asm
+
+      - name: Run ASM kernel tests
+        run: docker run --rm --platform linux/${{ matrix.arch }} asm-kernel-test
+
+  # Build the shared base once per architecture and push it, so every variant
+  # is built on the exact same layers. Hubs and laptops then download the base
+  # once and switching between variants only fetches the language layers.
+  base:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push base image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: base
+          platforms: linux/${{ matrix.arch }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:base-latest-${{ matrix.arch }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:base-latest-${{ matrix.arch }}
+          cache-to: type=inline
+
+  build-test-push:
+    runs-on: ubuntu-latest
+    needs: [asm-kernel-tests, base]
     strategy:
       fail-fast: false # Allow all matrix jobs to complete even if one fails.
       matrix:
-        arch: # Define architectures for multi-platform builds.
-          - amd64
-          - arm64
-    permissions: # Define permissions required for the workflow.
-      contents: read # Read access to the repository contents.
-      packages: write # Write access to the container registry.
-      attestations: write # Write access for signing attestations.
-      id-token: write # Generate OIDC tokens for authentication.
+        variant: [python, java, javascript, c, sql, asm, full]
+        arch: [amd64, arm64]
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4 # Check out the repository code.
+        uses: actions/checkout@v4
+
+      - name: Tag prefix # The full image keeps the unprefixed tags (latest, latest-amd64, ...).
+        id: prefix
+        run: |
+          if [ "${{ matrix.variant }}" = "full" ]; then echo "value=" >> "$GITHUB_OUTPUT"; else echo "value=${{ matrix.variant }}-" >> "$GITHUB_OUTPUT"; fi
 
       - name: Log in to the Container registry
-        uses: docker/login-action@v3 # Log in to Docker Hub.
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
         with:
-          username: ${{ vars.DOCKERHUB_USERNAME }} # Docker Hub username.
-          password: ${{ secrets.DOCKERHUB_TOKEN }} # Docker Hub token stored as a secret.
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7 # Generate metadata for the Docker image.
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} # Specify the image name.
-          tags: | # Define tags for the image.
-            type=schedule,pattern={{date 'YYYY-MM-DD'}}-${{ matrix.arch }} # Date-based tag for each architecture.
-            type=raw,value=latest-${{ matrix.arch }},enable={{is_default_branch}} # "Latest" tag for the default branch.
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=schedule,pattern={{date 'YYYY-MM-DD'}},prefix=${{ steps.prefix.outputs.value }},suffix=-${{ matrix.arch }}
+            type=raw,value=${{ steps.prefix.outputs.value }}latest-${{ matrix.arch }},enable={{is_default_branch}}
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3 # Enable multi-platform builds using QEMU.
+        uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3 # Set up Docker Buildx for building multi-platform images.
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build and push Docker image
-        id: push
-        uses: docker/build-push-action@v6 # Build and push the Docker image.
+      - name: Build image
+        uses: docker/build-push-action@v6
         with:
-          context: . # Use the current directory as the build context.
-          platforms: linux/${{ matrix.arch }} # Build for the specified architecture.
-          push: true # Push the image to the registry.
-          tags: ${{ steps.meta.outputs.tags }} # Use the generated tags.
-          labels: ${{ steps.meta.outputs.labels }} # Use the generated labels.
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-${{ matrix.arch }} # Use cache from the latest image.
-          cache-to: type=inline # Inline caching for faster builds.
+          context: .
+          target: ${{ matrix.variant }}
+          platforms: linux/${{ matrix.arch }}
+          build-contexts: ${{ github.event_name != 'pull_request' && format('base=docker-image://{0}/{1}:base-latest-{2}', env.REGISTRY, env.IMAGE_NAME, matrix.arch) || '' }}
+          load: true
+          tags: local/test:${{ matrix.variant }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.prefix.outputs.value }}latest-${{ matrix.arch }}
 
-  tag-images-as-latest:
-    runs-on: ubuntu-latest # Use the latest Ubuntu runner.
-    needs: build-and-push-image # Run this job after the "build-and-push-image" job.
+      - name: Run example notebooks # Notebook execution under QEMU is too slow; arm64 relies on the kernel tests.
+        if: matrix.arch == 'amd64'
+        run: bash ci/test-examples.sh local/test:${{ matrix.variant }}
+
+      - name: Push image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: ${{ matrix.variant }}
+          platforms: linux/${{ matrix.arch }}
+          build-contexts: ${{ github.event_name != 'pull_request' && format('base=docker-image://{0}/{1}:base-latest-{2}', env.REGISTRY, env.IMAGE_NAME, matrix.arch) || '' }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.prefix.outputs.value }}latest-${{ matrix.arch }}
+          cache-to: type=inline
+
+  multi-arch-tags:
+    runs-on: ubuntu-latest
+    needs: build-test-push
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [python, java, javascript, c, sql, asm, full]
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4 # Check out the repository code.
-
       - name: Log in to the Container registry
-        uses: docker/login-action@v3 # Log in to Docker Hub.
+        uses: docker/login-action@v3
         with:
-          username: ${{ vars.DOCKERHUB_USERNAME }} # Docker Hub username.
-          password: ${{ secrets.DOCKERHUB_TOKEN }} # Docker Hub token stored as a secret.
-
-      - name: Extract metadata (tags, labels) for Docker
-        id: meta
-        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7 # Generate metadata for the Docker image.
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }} # Specify the image name.
-          tags: | # Define tags for the image.
-            type=schedule,pattern={{date 'YYYY-MM-DD'}} # Date-based tag.
-            type=raw,value=latest,enable={{is_default_branch}} # "Latest" tag for the default branch.
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3 # Enable multi-platform builds using QEMU.
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3 # Set up Docker Buildx for building multi-platform images.
+        uses: docker/setup-buildx-action@v3
 
-      - name: Build and push Docker image
-        id: push
-        uses: docker/build-push-action@v6 # Build and push the Docker image.
-        with:
-          context: . # Use the current directory as the build context.
-          platforms: linux/arm64,linux/amd64 # Build for both amd64 and arm64 architectures.
-          push: true # Push the image to the registry.
-          tags: ${{ steps.meta.outputs.tags }} # Use the generated tags.
-          labels: ${{ steps.meta.outputs.labels }} # Use the generated labels.
-          cache-from: | # Use cache from the latest images for both architectures.
-            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-amd64
-            type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-arm64
-          cache-to: type=inline # Inline caching for faster builds.
+      - name: Create multi-arch "latest" tag from the per-arch images
+        run: |
+          if [ "${{ matrix.variant }}" = "full" ]; then prefix=""; else prefix="${{ matrix.variant }}-"; fi
+          image="${REGISTRY}/${IMAGE_NAME}"
+          docker buildx imagetools create -t "${image}:${prefix}latest" \
+            "${image}:${prefix}latest-amd64" "${image}:${prefix}latest-arm64"

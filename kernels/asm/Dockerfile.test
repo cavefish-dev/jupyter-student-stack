@@ -1,0 +1,7 @@
+# Test image for the ASM kernel: docker build -f Dockerfile.test -t asm-kernel-test . && docker run --rm asm-kernel-test
+FROM python:3.12-slim
+RUN apt-get update && apt-get install -y --no-install-recommends nasm && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+COPY . .
+RUN pip install --no-cache-dir ".[test]" && python -m asm_kernel.install --sys-prefix
+CMD ["pytest", "-q", "tests"]
