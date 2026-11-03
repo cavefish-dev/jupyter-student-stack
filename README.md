@@ -27,6 +27,46 @@ Every image includes Python and Bash. The full image includes everything.
 
 Each image is published for `amd64` and `arm64`; add `-amd64` or `-arm64` to a tag to pick one architecture (e.g. `java-latest-amd64`).
 
+All variants are built on the **same base layers**, so once you have one image, switching to another only downloads that language's layers (a few hundred MB, not the whole image).
+
+### Switching images on your computer
+
+Keep your work in a named volume, so every image sees the same `work/` folder:
+
+```powershell
+docker volume create jss-work
+docker run --rm -p 8888:8888 -v jss-work:/home/jovyan/work cavefish/jupyter-student-stack:java-latest
+# later, same work folder, different language:
+docker run --rm -p 8888:8888 -v jss-work:/home/jovyan/work cavefish/jupyter-student-stack:asm-latest
+```
+
+### Switching images on JupyterHub (Zero to JupyterHub)
+
+Offer the variants as profiles; users pick one when they start their server, and the image pre-puller caches them on the nodes:
+
+```yaml
+singleuser:
+  image:
+    name: cavefish/jupyter-student-stack
+    tag: latest-amd64
+    pullPolicy: Always
+  profileList:
+    - display_name: "All languages"
+      default: true
+    - display_name: "Python & Bash"
+      kubespawner_override: { image: "cavefish/jupyter-student-stack:python-latest-amd64" }
+    - display_name: "Java"
+      kubespawner_override: { image: "cavefish/jupyter-student-stack:java-latest-amd64" }
+    - display_name: "JavaScript / TypeScript"
+      kubespawner_override: { image: "cavefish/jupyter-student-stack:javascript-latest-amd64" }
+    - display_name: "C"
+      kubespawner_override: { image: "cavefish/jupyter-student-stack:c-latest-amd64" }
+    - display_name: "SQL"
+      kubespawner_override: { image: "cavefish/jupyter-student-stack:sql-latest-amd64" }
+    - display_name: "x86-64 Assembly"
+      kubespawner_override: { image: "cavefish/jupyter-student-stack:asm-latest-amd64" }
+```
+
 ## Installed Kernels
 
 - **Python** (via Jupyter minimal-notebook)
