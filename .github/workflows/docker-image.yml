@@ -5,16 +5,15 @@ on:
   push:
     branches:
       - main # Trigger on pushes to the main branch.
-    # Notebook-only changes are handled by notebook-outputs.yml, which runs the
-    # notebooks, commits their outputs and then starts this workflow.
+    # Only files that end up in the images. CI-only files (ci/**, workflows) are
+    # tested in pull requests but don't republish identical images. Notebook
+    # changes are built by notebook-outputs.yml after it commits their outputs.
     paths:
       - 'Dockerfile'
       - 'jupyter_server_config.py'
       - 'docker/**'
       - 'examples/README.md'
       - 'kernels/**'
-      - 'ci/**'
-      - '.github/workflows/docker-image.yml'
   pull_request: # Build and test, but don't push.
     paths:
       - 'Dockerfile'
@@ -35,8 +34,35 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A push that also changes notebooks (e.g. a kernel and its notebook together)
+  # is built once by notebook-outputs.yml after it commits the outputs, so this
+  # push run stops here instead of building the same images twice.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check whether this run should build
+        id: check
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: |
+          build=true
+          if [ "${{ github.event_name }}" = "push" ] && git diff --name-only "${BEFORE}" "${GITHUB_SHA}" -- 'examples/*.ipynb' | grep -q .; then
+            echo "This push changes notebooks: notebook-outputs.yml builds the images after updating their outputs."
+            build=false
+          fi
+          echo "build=${build}" >> "${GITHUB_OUTPUT}"
+
   asm-kernel-tests:
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -62,6 +88,8 @@ jobs:
   # once and switching between variants only fetches the language layers.
   base:
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     strategy:
       fail-fast: false
       matrix:
