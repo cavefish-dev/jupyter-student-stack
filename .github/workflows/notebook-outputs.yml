@@ -1,0 +1,72 @@
+name: Update example notebook outputs
+
+# When a notebook changes on main: run every example notebook in our own stack
+# (the full image built from this commit), commit the cell outputs, then rebuild
+# the images so they ship the notebooks with their outputs.
+#
+# It can't trigger itself: pushes made with GITHUB_TOKEN never start workflows.
+# As extra guards, the job skips commits by the bot and its commits say [skip ci].
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'examples/**.ipynb'
+  workflow_dispatch: # Re-run all notebooks by hand from the Actions tab.
+
+permissions:
+  contents: write # commit the outputs
+  actions: write # start the image workflow
+
+concurrency:
+  group: notebook-outputs
+  cancel-in-progress: false
+
+env:
+  REGISTRY: cavefish
+  IMAGE_NAME: jupyter-student-stack
+
+jobs:
+  update-outputs:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the full image from this commit # Fast: reuses the published layers.
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: full
+          platforms: linux/amd64
+          load: true
+          tags: local/stack:full
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest-amd64
+
+      - name: Run every notebook and save the outputs
+        run: bash ci/execute-examples.sh local/stack:full examples
+
+      - name: Commit the outputs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add examples
+          if git diff --cached --quiet; then
+            echo "Outputs are already up to date."
+          else
+            git commit -m "Update example notebook outputs [skip ci]"
+            git pull --rebase origin main
+            git push origin HEAD:main
+          fi
+
+      - name: Rebuild the images with the updated notebooks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run docker-image.yml --ref main

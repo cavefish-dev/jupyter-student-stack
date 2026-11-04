@@ -5,11 +5,13 @@ on:
   push:
     branches:
       - main # Trigger on pushes to the main branch.
+    # Notebook-only changes are handled by notebook-outputs.yml, which runs the
+    # notebooks, commits their outputs and then starts this workflow.
     paths:
       - 'Dockerfile'
       - 'jupyter_server_config.py'
       - 'docker/**'
-      - 'examples/**'
+      - 'examples/README.md'
       - 'kernels/**'
       - 'ci/**'
       - '.github/workflows/docker-image.yml'
